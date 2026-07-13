@@ -1,0 +1,34 @@
+.page { min-height: 100vh; padding: 36px 20px 64px; background: #fff8e8; color: #1f2925; }
+.shell { width: min(1120px, 100%); margin: 0 auto; }
+.header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
+.brand { display: flex; align-items: center; gap: 12px; }
+.mark { width: 48px; height: 48px; display: grid; place-items: center; border: 2px solid #1f2925; border-radius: 15px; background: #ff6b51; color: white; box-shadow: 3px 3px 0 #1f2925; font-size: 12px; font-weight: 900; transform: rotate(-3deg); }
+.header h1 { margin: 0; font-size: clamp(24px, 4vw, 36px); }
+.header p { margin: 5px 0 0; color: #62706a; font-size: 13px; }
+.logout, .login button { padding: 11px 16px; border: 2px solid #1f2925; border-radius: 11px; background: white; box-shadow: 2px 2px 0 #1f2925; font-weight: 900; cursor: pointer; }
+.login { width: min(430px, 100%); margin: 13vh auto 0; padding: 28px; border: 2px solid #1f2925; border-radius: 18px; background: #fffdf8; box-shadow: 7px 7px 0 #1f2925; }
+.login h1 { margin: 0 0 8px; }
+.login p { color: #62706a; line-height: 1.6; }
+.login label { display: grid; gap: 8px; margin-top: 22px; font-weight: 900; }
+.login input { width: 100%; min-height: 48px; box-sizing: border-box; padding: 10px 12px; border: 2px solid #aeb8b2; border-radius: 10px; background: white; }
+.login button { width: 100%; margin-top: 13px; background: #ff6b51; color: white; }
+.error { padding: 10px 12px; border-radius: 9px; background: #ffe1db; color: #8a2c1e !important; font-weight: 800; }
+.cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 13px; }
+.card { min-height: 112px; padding: 18px; border: 2px solid #1f2925; border-radius: 15px; background: #fffdf8; box-shadow: 3px 3px 0 #1f2925; }
+.card:nth-child(2) { background: #fff1af; }.card:nth-child(3) { background: #def3fb; }.card:nth-child(4) { background: #ddf5e8; }
+.card span { color: #62706a; font-size: 12px; font-weight: 900; }
+.card strong { display: block; margin-top: 15px; font-size: 32px; }
+.section { margin-top: 22px; padding: 22px; border: 2px solid #1f2925; border-radius: 17px; background: #fffdf8; }
+.section h2 { margin: 0 0 18px; font-size: 18px; }
+.funnel { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.funnel article { padding: 16px; border-radius: 12px; background: #f1f5f3; }
+.funnel span { display: block; color: #62706a; font-size: 12px; font-weight: 800; }
+.funnel strong { display: block; margin-top: 8px; font-size: 25px; }
+.chart { height: 230px; display: flex; align-items: flex-end; gap: 8px; padding-top: 22px; border-bottom: 2px solid #1f2925; }
+.barItem { min-width: 0; flex: 1; display: grid; align-content: end; justify-items: center; gap: 6px; height: 100%; }
+.bar { width: min(28px, 80%); min-height: 3px; border: 1.5px solid #1f2925; border-bottom: 0; border-radius: 6px 6px 0 0; background: #87d8ef; }
+.barItem b { font-size: 10px; }.barItem small { color: #62706a; font-size: 9px; }
+.downloads { display: flex; flex-wrap: wrap; gap: 10px; }
+.downloads span { padding: 10px 13px; border-radius: 999px; background: #f1f5f3; font-size: 12px; font-weight: 900; }
+.notice { padding: 18px; border: 2px solid #b44938; border-radius: 13px; background: #ffe2db; color: #8d3022; }
+@media (max-width: 760px) { .cards { grid-template-columns: 1fr 1fr; }.funnel { grid-template-columns: 1fr; }.chart { gap: 3px; }.barItem small { font-size: 7px; } }

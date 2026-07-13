@@ -5,6 +5,7 @@ import { DndContext, DragEndEvent, DragOverlay, DragOverEvent, DragStartEvent, K
 import { findAlternativeSlot, findFixedEventConflicts, findSlotOnDay, generateSchedule, validateManualScheduleBlock, validatePlan } from "@/lib/scheduler";
 import { downloadSchedulePdf, downloadSchedulePptx, ExportScope, exportFilename } from "@/lib/exporters";
 import { buildVacationWeeks, VacationWeek } from "@/lib/vacation";
+import { trackAnalytics } from "@/lib/analytics";
 import ExportPages from "@/components/ExportPages";
 import {
   ActivityPreference,
@@ -147,6 +148,10 @@ export default function PlannerApp() {
   }, [state, hydrated]);
 
   useEffect(() => {
+    if (hydrated) trackAnalytics("page_view");
+  }, [hydrated]);
+
+  useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(""), 4200);
     return () => window.clearTimeout(timer);
@@ -160,6 +165,7 @@ export default function PlannerApp() {
     try {
       const result = generateSchedule(state.plan, state.fixedEvents, state.activities);
       setState((current) => ({ ...current, result, step: 4 }));
+      trackAnalytics("schedule_completed");
       setGenerationError("");
       setToast("우리 가족 시간표를 만들었어요!");
     } catch (error) {
@@ -196,6 +202,7 @@ export default function PlannerApp() {
       link.download = `${state.plan.nickname || "우리집"}-여름방학-시간표.png`;
       link.href = dataUrl;
       link.click();
+      trackAnalytics("png_download", "weekly");
       setToast("PNG 시간표를 저장했어요.");
     } catch {
       setToast("PNG 저장이 어려워요. 인쇄 버튼으로 PDF를 저장해 주세요.");
@@ -271,7 +278,7 @@ export default function PlannerApp() {
   return (
     <main className="app-shell">
       <Header step={state.step} onStep={setStep} hasResult={Boolean(state.result)} />
-      {state.step === 0 && <Landing hasSaved={Boolean(state.plan.startDate || state.fixedEvents.length)} onStart={() => setStep(state.plan.startDate ? 1 : 1)} onResume={() => setStep(Math.max(1, state.result ? 4 : state.step))} />}
+      {state.step === 0 && <Landing hasSaved={Boolean(state.plan.startDate || state.fixedEvents.length)} onStart={() => { trackAnalytics("planner_started"); setStep(1); }} onResume={() => setStep(Math.max(1, state.result ? 4 : state.step))} />}
       {state.step === 1 && <Basics state={state} setState={setState} onNext={() => {
         const errors = validatePlan(state.plan);
         if (errors.length) return setToast(errors[0]);
@@ -279,7 +286,7 @@ export default function PlannerApp() {
       }} />}
       {state.step === 2 && <ParentSchedule state={state} setState={setState} conflicts={conflicts} onBack={() => setStep(1)} onNext={() => conflicts.length ? setToast("겹치는 고정 일정을 먼저 고쳐주세요.") : setStep(3)} />}
       {state.step === 3 && <ChildActivities state={state} setState={setState} generationError={generationError} onBack={() => setStep(2)} onGenerate={generate} />}
-      {state.step === 4 && state.result && <Results state={state} scheduleRef={scheduleRef} onBack={() => setStep(3)} onRegenerate={generate} onBlockAction={updateBlock} onBlockDrop={dropBlockOnDay} onManualAdd={addManualBlock} onDownload={downloadPng} onPrint={() => window.print()} onNotify={setToast} busy={busy} />}
+      {state.step === 4 && state.result && <Results state={state} scheduleRef={scheduleRef} onBack={() => setStep(3)} onRegenerate={generate} onBlockAction={updateBlock} onBlockDrop={dropBlockOnDay} onManualAdd={addManualBlock} onDownload={downloadPng} onPrint={() => { trackAnalytics("print"); window.print(); }} onNotify={setToast} busy={busy} />}
       <footer className="site-footer no-print">
         <div><strong>방학한칸</strong><span>계획은 이 기기의 브라우저에만 저장돼요.</span></div>
         <button className="text-button danger-text" onClick={resetAll}>모두 지우기</button>
@@ -529,6 +536,7 @@ function Results({ state, scheduleRef, onBack, onRegenerate, onBlockAction, onBl
       await document.fonts.ready;
       const nodes = Array.from(document.querySelectorAll<HTMLElement>(`[data-pdf-scope="${exportScope}"]`));
       await downloadSchedulePdf(nodes, exportFilename(state, exportScope, "pdf"));
+      trackAnalytics("pdf_download", exportScope);
       onNotify(`${exportScope === "weekly" ? "주간" : "방학 전체"} PDF를 저장했어요.`);
     } catch (error) {
       onNotify(error instanceof Error ? error.message : "PDF 파일을 만들지 못했어요.");
@@ -541,6 +549,7 @@ function Results({ state, scheduleRef, onBack, onRegenerate, onBlockAction, onBl
     setFileBusy("pptx");
     try {
       await downloadSchedulePptx(state, exportScope);
+      trackAnalytics("pptx_download", exportScope);
       onNotify("수정 가능한 PPTX를 저장했어요.");
     } catch (error) {
       onNotify(error instanceof Error ? error.message : "PPTX 파일을 만들지 못했어요.");
