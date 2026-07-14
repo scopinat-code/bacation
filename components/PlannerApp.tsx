@@ -288,7 +288,11 @@ export default function PlannerApp() {
       {state.step === 3 && <ChildActivities state={state} setState={setState} generationError={generationError} onBack={() => setStep(2)} onGenerate={generate} />}
       {state.step === 4 && state.result && <Results state={state} scheduleRef={scheduleRef} onBack={() => setStep(3)} onRegenerate={generate} onBlockAction={updateBlock} onBlockDrop={dropBlockOnDay} onManualAdd={addManualBlock} onDownload={downloadPng} onPrint={() => { trackAnalytics("print"); window.print(); }} onNotify={setToast} busy={busy} />}
       <footer className="site-footer no-print">
-        <div><strong>방학한칸</strong><span>계획은 이 기기의 브라우저에만 저장돼요.</span></div>
+        <div>
+          <strong>방학한칸</strong>
+          <span>계획은 이 기기의 브라우저에만 저장돼요.</span>
+          <span>서비스 문의사항 : <a href="mailto:scopinat@gmail.com">scopinat@gmail.com</a></span>
+        </div>
         <button className="text-button danger-text" onClick={resetAll}>모두 지우기</button>
       </footer>
       {toast && <div className="toast" role="status">{toast}</div>}
