@@ -393,7 +393,7 @@ export default function PlannerApp() {
           <span>계획은 이 기기의 브라우저에만 저장돼요.</span>
           <span>서비스 문의사항 : <a href="mailto:scopinat@gmail.com">scopinat@gmail.com</a></span>
         </div>
-        <div><a className="text-button" href="/qna">Q&amp;A 게시판</a><button className="text-button danger-text" onClick={resetAll}>모두 지우기</button></div>
+        <button className="text-button danger-text" onClick={resetAll}>모두 지우기</button>
       </footer>
       {toast && <div className="toast" role="status">{toast}</div>}
     </main>
@@ -405,13 +405,16 @@ function Header({ step, plan, onStep, hasResult }: { step: number; plan: Planner
   return (
     <header className="topbar no-print">
       <button className="brand" onClick={() => onStep(0)} aria-label="방학한칸 홈"><span className="brand-mark">한칸</span><span>방학한칸</span></button>
-      {step > 0 && <nav className="progress" aria-label="계획 만들기 진행 상황">
-        {steps.slice(1).map((label, index) => {
-          const number = index + 1;
-          const enabled = number <= step || (number === 4 && hasResult);
-          return <button key={label} disabled={!enabled} className={number === step ? "active" : number < step ? "done" : ""} onClick={() => enabled && onStep(number)}><span>{number < step ? "✓" : number}</span><em>{label}</em></button>;
-        })}
-      </nav>}
+      <div className="topbar-nav">
+        {step > 0 && <nav className="progress" aria-label="계획 만들기 진행 상황">
+          {steps.slice(1).map((label, index) => {
+            const number = index + 1;
+            const enabled = number <= step || (number === 4 && hasResult);
+            return <button key={label} disabled={!enabled} className={number === step ? "active" : number < step ? "done" : ""} onClick={() => enabled && onStep(number)}><span>{number < step ? "✓" : number}</span><em>{label}</em></button>;
+          })}
+        </nav>}
+        <a className="topbar-qna" href="/qna"><span aria-hidden="true">💬</span> Q&amp;A</a>
+      </div>
     </header>
   );
 }
