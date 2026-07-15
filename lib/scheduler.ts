@@ -14,6 +14,26 @@ import {
 type Interval = { start: number; end: number; category?: string };
 const LIFE_TIME_INCREMENT = 10;
 
+export interface CascadeShift {
+  blockId: string;
+  title: string;
+  fromStart: string;
+  fromEnd: string;
+  start: string;
+  end: string;
+}
+
+export type CascadeMoveOutcome =
+  | {
+    ok: true;
+    result: ScheduleResult;
+    day: DayKey;
+    start: string;
+    end: string;
+    shifted: CascadeShift[];
+  }
+  | { ok: false; error: string };
+
 export function activityGridMinutes(plan: Pick<VacationPlan, "schoolLevel">): number {
   const level = schoolLevelOf(plan);
   if (level === "middle") return 60;
@@ -367,4 +387,112 @@ export function findAlternativeSlot(plan: VacationPlan, result: ScheduleResult, 
     if (slot) return slot;
   }
   return null;
+}
+
+function nextStartPastLocked(start: number, duration: number, locked: Interval[]): number {
+  let candidate = start;
+  for (;;) {
+    const conflict = locked.find((item) => overlaps({ start: candidate, end: candidate + duration }, item));
+    if (!conflict) return candidate;
+    candidate = conflict.end;
+  }
+}
+
+export function moveBlockWithCascade(
+  plan: VacationPlan,
+  result: ScheduleResult,
+  block: ScheduleBlock,
+  targetDay: DayKey,
+  requestedStart: string,
+  fixedEvents: FixedEvent[] = [],
+): CascadeMoveOutcome {
+  if (block.kind === "fixed" || block.locked) return { ok: false, error: "고정되거나 잠긴 일정은 옮길 수 없어요." };
+  if (!/^\d{2}:\d{2}$/.test(requestedStart)) return { ok: false, error: "옮길 시작 시각을 다시 골라주세요." };
+
+  const start = toMinutes(requestedStart);
+  const duration = toMinutes(block.end) - toMinutes(block.start);
+  const range = lifeRange(plan, targetDay);
+  if (!Number.isFinite(start) || start % LIFE_TIME_INCREMENT !== 0) return { ok: false, error: "시각은 10분 단위로 골라주세요." };
+  if (duration <= 0 || start < range.start || start + duration > range.end) {
+    return { ok: false, error: `${DAY_LABELS[targetDay]}요일의 기상·취침 시간 안에 놓아주세요.` };
+  }
+
+  const otherTargetBlocks = result.blocks[targetDay].filter((item) => item.id !== block.id);
+  const immovable = otherTargetBlocks
+    .filter((item) => item.kind === "fixed" || item.locked)
+    .map((item) => {
+      const fixed = item.kind === "fixed" ? fixedEvents.find((event) => event.id === item.sourceId) : undefined;
+      const buffer = fixed?.bufferMinutes ?? 0;
+      return { block: item, start: toMinutes(item.start) - buffer, end: toMinutes(item.end) + buffer };
+    })
+    .sort((a, b) => a.start - b.start);
+  const directBlocker = immovable.find((item) => overlaps(
+    { start, end: start + duration },
+    { start: item.start, end: item.end },
+  ));
+  if (directBlocker) return { ok: false, error: `‘${directBlocker.block.title}’ 일정은 고정되어 있어 그 시간에는 놓을 수 없어요.` };
+
+  const shifted: CascadeShift[] = [];
+  let chainEnd = start + duration;
+  const movable = otherTargetBlocks
+    .filter((item) => item.kind !== "fixed" && !item.locked)
+    .sort((a, b) => toMinutes(a.start) - toMinutes(b.start));
+
+  for (const item of movable) {
+    const originalStart = toMinutes(item.start);
+    const originalEnd = toMinutes(item.end);
+    if (originalEnd <= start) continue;
+    if (originalStart >= chainEnd) break;
+
+    const itemDuration = originalEnd - originalStart;
+    const movedStart = nextStartPastLocked(
+      chainEnd,
+      itemDuration,
+      immovable.map(({ start: lockedStart, end: lockedEnd }) => ({ start: lockedStart, end: lockedEnd })),
+    );
+    const movedEnd = movedStart + itemDuration;
+    if (movedEnd > range.end) {
+      return { ok: false, error: `뒤로 밀리는 일정이 ${DAY_LABELS[targetDay]}요일 취침 시간을 넘어요. 조금 앞쪽에 놓아주세요.` };
+    }
+    shifted.push({
+      blockId: item.id,
+      title: item.title,
+      fromStart: item.start,
+      fromEnd: item.end,
+      start: toTime(movedStart),
+      end: toTime(movedEnd),
+    });
+    chainEnd = movedEnd;
+  }
+
+  const shiftById = new Map(shifted.map((item) => [item.blockId, item]));
+  const blocks = DAY_KEYS.reduce((next, day) => {
+    next[day] = result.blocks[day]
+      .filter((item) => item.id !== block.id)
+      .map((item) => {
+        if (day !== targetDay) return { ...item };
+        const movement = shiftById.get(item.id);
+        return movement ? { ...item, start: movement.start, end: movement.end } : { ...item };
+      });
+    return next;
+  }, {} as Record<DayKey, ScheduleBlock[]>);
+  const end = toTime(start + duration);
+  blocks[targetDay].push({
+    ...block,
+    day: targetDay,
+    start: requestedStart,
+    end,
+    period: requestedStart < "12:00" ? "morning" : "afternoon",
+    reason: "캘린더에서 원하는 요일과 시각으로 직접 옮긴 활동이에요.",
+  });
+  blocks[targetDay].sort((a, b) => toMinutes(a.start) - toMinutes(b.start));
+
+  return {
+    ok: true,
+    result: { ...result, blocks },
+    day: targetDay,
+    start: requestedStart,
+    end,
+    shifted,
+  };
 }

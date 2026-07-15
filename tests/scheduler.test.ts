@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { activityGridMinutes, findAlternativeSlot, findFixedEventConflicts, findSlotOnDay, generateSchedule, MustHaveScheduleError, toMinutes, validateManualScheduleBlock, validatePlan } from "../lib/scheduler";
+import { activityGridMinutes, findAlternativeSlot, findFixedEventConflicts, findSlotOnDay, generateSchedule, moveBlockWithCascade, MustHaveScheduleError, toMinutes, validateManualScheduleBlock, validatePlan } from "../lib/scheduler";
 import { buildVacationWeeks } from "../lib/vacation";
-import { ActivityPreference, FixedEvent, VacationPlan } from "../lib/types";
+import { ActivityPreference, DAY_KEYS, FixedEvent, ScheduleBlock, ScheduleResult, VacationPlan } from "../lib/types";
 
 const plan: VacationPlan = {
   startDate: "2026-07-20",
@@ -167,6 +167,105 @@ describe("manual schedule validation", () => {
     expect(validateManualScheduleBlock(plan, [], result, "mon", "10:30", "11:30")).toContain("직접 일정");
     const fixed: FixedEvent[] = [{ id: "swim", title: "수영", days: ["mon"], start: "14:00", end: "15:00", bufferMinutes: 20 }];
     expect(validateManualScheduleBlock(plan, fixed, result, "mon", "13:50", "14:00")).toContain("앞뒤 여유");
+  });
+});
+
+describe("exact calendar cascade moves", () => {
+  const scheduleBlock = (overrides: Partial<ScheduleBlock> = {}): ScheduleBlock => ({
+    id: "moving",
+    sourceId: "moving",
+    day: "mon",
+    title: "옮기는 일정",
+    icon: "⭐",
+    category: "play",
+    start: "09:00",
+    end: "10:00",
+    period: "morning",
+    kind: "activity",
+    reason: "테스트 일정",
+    locked: false,
+    ...overrides,
+  });
+  const emptyResult = (): ScheduleResult => ({
+    blocks: DAY_KEYS.reduce((blocks, day) => ({ ...blocks, [day]: [] }), {} as ScheduleResult["blocks"]),
+    warnings: [],
+    unplaced: [],
+    generatedAt: "2026-07-16T00:00:00.000Z",
+    version: 2,
+  });
+
+  it("places a block on the exact requested day and 10-minute time", () => {
+    const result = emptyResult();
+    const block = scheduleBlock();
+    result.blocks.mon.push(block);
+    const moved = moveBlockWithCascade(plan, result, block, "wed", "10:30");
+    expect(moved.ok).toBe(true);
+    if (!moved.ok) return;
+    expect(moved.result.blocks.wed.find((item) => item.id === block.id)).toMatchObject({ start: "10:30", end: "11:30" });
+    expect(moved.result.blocks.mon).toHaveLength(0);
+  });
+
+  it("pushes every overlapping movable block later while preserving order", () => {
+    const result = emptyResult();
+    const block = scheduleBlock();
+    result.blocks.mon.push(block);
+    result.blocks.tue.push(
+      scheduleBlock({ id: "first", sourceId: "first", day: "tue", title: "첫 일정", start: "10:00", end: "11:00" }),
+      scheduleBlock({ id: "second", sourceId: "second", day: "tue", title: "둘째 일정", start: "11:00", end: "12:00" }),
+    );
+    const moved = moveBlockWithCascade(plan, result, block, "tue", "10:30");
+    expect(moved.ok).toBe(true);
+    if (!moved.ok) return;
+    expect(moved.shifted.map((item) => [item.blockId, item.start, item.end])).toEqual([
+      ["first", "11:30", "12:30"],
+      ["second", "12:30", "13:30"],
+    ]);
+  });
+
+  it("moves a cascading block past a later fixed event", () => {
+    const result = emptyResult();
+    const block = scheduleBlock();
+    result.blocks.mon.push(block);
+    result.blocks.tue.push(
+      scheduleBlock({ id: "movable", sourceId: "movable", day: "tue", start: "10:30", end: "11:30" }),
+      scheduleBlock({ id: "fixed", sourceId: "fixed", day: "tue", title: "학원", category: "fixed", start: "11:30", end: "12:30", period: "fixed", kind: "fixed", locked: true }),
+    );
+    const moved = moveBlockWithCascade(plan, result, block, "tue", "10:00");
+    expect(moved.ok).toBe(true);
+    if (!moved.ok) return;
+    expect(moved.shifted[0]).toMatchObject({ blockId: "movable", start: "12:30", end: "13:30" });
+  });
+
+  it("rejects direct overlap with fixed or locked schedules", () => {
+    const result = emptyResult();
+    const block = scheduleBlock();
+    result.blocks.mon.push(block);
+    result.blocks.tue.push(scheduleBlock({ id: "locked", sourceId: "locked", day: "tue", title: "잠긴 일정", start: "10:00", end: "11:00", locked: true }));
+    const moved = moveBlockWithCascade(plan, result, block, "tue", "10:30");
+    expect(moved).toMatchObject({ ok: false });
+    if (moved.ok) return;
+    expect(moved.error).toContain("고정되어");
+  });
+
+  it("protects the buffer around a fixed parent schedule", () => {
+    const result = emptyResult();
+    const block = scheduleBlock();
+    result.blocks.mon.push(block);
+    result.blocks.tue.push(scheduleBlock({ id: "fixed-tue", sourceId: "academy", day: "tue", title: "학원", category: "fixed", start: "14:00", end: "15:00", period: "fixed", kind: "fixed", locked: true }));
+    const fixed: FixedEvent[] = [{ id: "academy", title: "학원", days: ["tue"], start: "14:00", end: "15:00", bufferMinutes: 20 }];
+    const moved = moveBlockWithCascade(plan, result, block, "tue", "13:10", fixed);
+    expect(moved).toMatchObject({ ok: false });
+  });
+
+  it("rejects the entire move when the cascade passes sleep time", () => {
+    const result = emptyResult();
+    const block = scheduleBlock();
+    result.blocks.mon.push(block);
+    result.blocks.tue.push(scheduleBlock({ id: "late", sourceId: "late", day: "tue", start: "21:00", end: "22:00" }));
+    const moved = moveBlockWithCascade(plan, result, block, "tue", "21:00");
+    expect(moved).toMatchObject({ ok: false });
+    if (moved.ok) return;
+    expect(moved.error).toContain("취침 시간");
   });
 });
 

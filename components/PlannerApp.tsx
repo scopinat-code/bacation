@@ -1,8 +1,8 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { DndContext, DragEndEvent, DragOverlay, DragOverEvent, DragStartEvent, KeyboardSensor, PointerSensor, TouchSensor, pointerWithin, useDraggable, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
-import { findAlternativeSlot, findFixedEventConflicts, findSlotOnDay, generateSchedule, validateManualScheduleBlock, validatePlan } from "@/lib/scheduler";
+import { CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { DndContext, DragEndEvent, DragMoveEvent, DragOverlay, DragStartEvent, KeyboardSensor, PointerSensor, TouchSensor, pointerWithin, useDraggable, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
+import { CascadeMoveOutcome, findAlternativeSlot, findFixedEventConflicts, generateSchedule, moveBlockWithCascade, toMinutes, toTime, validateManualScheduleBlock, validatePlan } from "@/lib/scheduler";
 import { downloadSchedulePdf, downloadSchedulePptx, ExportScope, exportFilename } from "@/lib/exporters";
 import { buildVacationWeeks, VacationWeek } from "@/lib/vacation";
 import { trackAnalytics } from "@/lib/analytics";
@@ -188,6 +188,7 @@ export default function PlannerApp() {
   const [toast, setToast] = useState("");
   const [generationError, setGenerationError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [undoMove, setUndoMove] = useState<{ result: NonNullable<PlannerState["result"]>; toast: string } | null>(null);
   const scheduleRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -333,16 +334,24 @@ export default function PlannerApp() {
     setToast(action === "move" ? "다른 빈 시간으로 옮겼어요." : action === "delete" ? "시간표에서 뺐어요." : block.locked ? "자물쇠를 풀었어요." : "이 시간을 잠갔어요.");
   };
 
-  const dropBlockOnDay = (block: ScheduleBlock, targetDay: DayKey, targetPeriod: "morning" | "afternoon") => {
+  const dropBlockAtTime = (block: ScheduleBlock, targetDay: DayKey, requestedStart: string) => {
     if (!state.result || block.kind === "fixed" || block.locked) return setToast("고정되거나 잠긴 블록은 먼저 자물쇠를 풀어주세요.");
-    const result = structuredClone(state.result);
-    const slot = findSlotOnDay(state.plan, result, block, targetDay, targetPeriod);
-    if (!slot) return setToast(`${DAY_LABELS[targetDay]}요일 ${targetPeriod === "morning" ? "오전" : "오후"}에는 옮길 빈 시간이 없어요.`);
-    result.blocks[block.day] = result.blocks[block.day].filter((item) => item.id !== block.id);
-    result.blocks[targetDay].push({ ...block, day: targetDay, period: targetPeriod, start: slot.start, end: slot.end, reason: "캘린더에서 직접 끌어 옮긴 활동이에요." });
-    result.blocks[targetDay].sort((a, b) => a.start.localeCompare(b.start));
-    setState((current) => ({ ...current, result }));
-    setToast(`${block.title}을 ${DAY_LABELS[targetDay]}요일 ${targetPeriod === "morning" ? "오전" : "오후"} ${slot.start}로 옮겼어요.`);
+    const moved = moveBlockWithCascade(state.plan, state.result, block, targetDay, requestedStart, state.fixedEvents);
+    if (!moved.ok) return setToast(moved.error);
+    const previous = structuredClone(state.result);
+    const message = moved.shifted.length
+      ? `${block.title}을 ${DAY_LABELS[targetDay]}요일 ${moved.start}로 옮기고 ${moved.shifted.length}개 일정을 뒤로 밀었어요.`
+      : `${block.title}을 ${DAY_LABELS[targetDay]}요일 ${moved.start}로 옮겼어요.`;
+    setState((current) => ({ ...current, result: moved.result }));
+    setUndoMove({ result: previous, toast: message });
+    setToast(message);
+  };
+
+  const undoLastMove = () => {
+    if (!undoMove) return;
+    setState((current) => ({ ...current, result: undoMove.result }));
+    setUndoMove(null);
+    setToast("마지막 일정 이동을 되돌렸어요.");
   };
 
   const addManualBlock = (day: DayKey, title: string, start: string, end: string): string | null => {
@@ -386,7 +395,7 @@ export default function PlannerApp() {
       }} />}
       {state.step === 2 && <ParentSchedule state={state} setState={setState} conflicts={conflicts} onBack={() => setStep(1)} onNext={() => conflicts.length ? setToast("겹치는 고정 일정을 먼저 고쳐주세요.") : setStep(3)} />}
       {state.step === 3 && <ChildActivities state={state} setState={setState} generationError={generationError} onBack={() => setStep(2)} onGenerate={generate} />}
-      {state.step === 4 && state.result && <Results state={state} scheduleRef={scheduleRef} onBack={() => setStep(3)} onRegenerate={generate} onBlockAction={updateBlock} onBlockDrop={dropBlockOnDay} onManualAdd={addManualBlock} onDownload={downloadPng} onPrint={() => { trackAnalytics("print"); window.print(); }} onNotify={setToast} busy={busy} />}
+      {state.step === 4 && state.result && <Results state={state} scheduleRef={scheduleRef} onBack={() => setStep(3)} onRegenerate={generate} onBlockAction={updateBlock} onBlockDrop={dropBlockAtTime} onManualAdd={addManualBlock} onDownload={downloadPng} onPrint={() => { trackAnalytics("print"); window.print(); }} onNotify={setToast} busy={busy} />}
       <footer className="site-footer no-print">
         <div>
           <strong>방학한칸</strong>
@@ -395,7 +404,7 @@ export default function PlannerApp() {
         </div>
         <button className="text-button danger-text" onClick={resetAll}>모두 지우기</button>
       </footer>
-      {toast && <div className="toast" role="status">{toast}</div>}
+      {toast && <div className="toast" role="status"><span>{toast}</span>{undoMove?.toast === toast && <button type="button" onClick={undoLastMove}>되돌리기</button>}</div>}
     </main>
   );
 }
@@ -595,16 +604,45 @@ function ChildActivities({ state, setState, generationError, onBack, onGenerate 
   );
 }
 
-type DropPeriod = "morning" | "afternoon";
-type DropSlot = { day: DayKey; start: string; end: string };
+const CALENDAR_HOUR_HEIGHT = 72;
+const CALENDAR_SNAP_MINUTES = 10;
 
-function parseDropTarget(value: string): { day: DayKey; period: DropPeriod } | null {
-  const [prefix, day, period] = value.split(":");
-  if (prefix !== "slot" || !DAY_KEYS.includes(day as DayKey) || (period !== "morning" && period !== "afternoon")) return null;
-  return { day: day as DayKey, period };
+type CalendarRange = { start: number; end: number };
+type CalendarDragPreview = {
+  day: DayKey;
+  start: string;
+  end: string;
+  outcome: CascadeMoveOutcome;
+};
+
+function calendarRange(plan: PlannerState["plan"]): CalendarRange {
+  const times = Object.values(plan.lifeHours).map(toMinutes);
+  return {
+    start: Math.floor(Math.min(...times) / 60) * 60,
+    end: Math.ceil(Math.max(...times) / 60) * 60,
+  };
 }
 
-function Results({ state, scheduleRef, onBack, onRegenerate, onBlockAction, onBlockDrop, onManualAdd, onDownload, onPrint, onNotify, busy }: { state: PlannerState; scheduleRef: React.RefObject<HTMLDivElement | null>; onBack: () => void; onRegenerate: () => void; onBlockAction: (block: ScheduleBlock, action: "lock" | "delete" | "move") => void; onBlockDrop: (block: ScheduleBlock, day: DayKey, period: DropPeriod) => void; onManualAdd: (day: DayKey, title: string, start: string, end: string) => string | null; onDownload: () => void; onPrint: () => void; onNotify: (message: string) => void; busy: boolean }) {
+function awakeRange(plan: PlannerState["plan"], day: DayKey): CalendarRange {
+  const weekend = day === "sat" || day === "sun";
+  return weekend
+    ? { start: toMinutes(plan.lifeHours.weekendWake), end: toMinutes(plan.lifeHours.weekendSleep) }
+    : { start: toMinutes(plan.lifeHours.weekdayWake), end: toMinutes(plan.lifeHours.weekdaySleep) };
+}
+
+function parseDayDropTarget(value: string): DayKey | null {
+  const [prefix, day] = value.split(":");
+  return prefix === "day" && DAY_KEYS.includes(day as DayKey) ? day as DayKey : null;
+}
+
+function timeBlockStyle(start: string, end: string, range: CalendarRange): CSSProperties {
+  return {
+    top: `${((toMinutes(start) - range.start) / 60) * CALENDAR_HOUR_HEIGHT}px`,
+    height: `${Math.max(34, ((toMinutes(end) - toMinutes(start)) / 60) * CALENDAR_HOUR_HEIGHT)}px`,
+  };
+}
+
+function Results({ state, scheduleRef, onBack, onRegenerate, onBlockAction, onBlockDrop, onManualAdd, onDownload, onPrint, onNotify, busy }: { state: PlannerState; scheduleRef: React.RefObject<HTMLDivElement | null>; onBack: () => void; onRegenerate: () => void; onBlockAction: (block: ScheduleBlock, action: "lock" | "delete" | "move") => void; onBlockDrop: (block: ScheduleBlock, day: DayKey, start: string) => void; onManualAdd: (day: DayKey, title: string, start: string, end: string) => string | null; onDownload: () => void; onPrint: () => void; onNotify: (message: string) => void; busy: boolean }) {
   const result = state.result!;
   const level = schoolLevelOf(state.plan);
   const isElementary = level === "elementary";
@@ -613,8 +651,9 @@ function Results({ state, scheduleRef, onBack, onRegenerate, onBlockAction, onBl
   const [exportScope, setExportScope] = useState<ExportScope>("weekly");
   const [fileBusy, setFileBusy] = useState<"pdf" | "pptx" | null>(null);
   const [activeBlock, setActiveBlock] = useState<ScheduleBlock | null>(null);
-  const [overDropId, setOverDropId] = useState<string | null>(null);
+  const [dragPreview, setDragPreview] = useState<CalendarDragPreview | null>(null);
   const [manualDay, setManualDay] = useState<DayKey | null>(null);
+  const gridRange = useMemo(() => calendarRange(state.plan), [state.plan]);
   const weeks = useMemo(() => buildVacationWeeks(state.plan, result, state.exceptions), [state.plan, result, state.exceptions]);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 7 } }),
@@ -622,17 +661,6 @@ function Results({ state, scheduleRef, onBack, onRegenerate, onBlockAction, onBl
     useSensor(KeyboardSensor),
   );
   const totalActivities = DAY_KEYS.flatMap((day) => result.blocks[day]).filter((block) => block.kind === "activity").length;
-  const dropSlots = useMemo(() => {
-    const slots = new Map<string, DropSlot | null>();
-    if (!activeBlock) return slots;
-    for (const day of DAY_KEYS) {
-      for (const period of ["morning", "afternoon"] as DropPeriod[]) {
-        slots.set(`slot:${day}:${period}`, findSlotOnDay(state.plan, result, activeBlock, day, period));
-      }
-    }
-    return slots;
-  }, [activeBlock, result, state.plan]);
-
   const changeView = (scope: ExportScope) => {
     setViewMode(scope);
     setExportScope(scope);
@@ -643,24 +671,37 @@ function Results({ state, scheduleRef, onBack, onRegenerate, onBlockAction, onBl
     setActiveBlock(block);
   };
 
-  const handleDragOver = ({ over }: DragOverEvent) => {
-    const id = over ? String(over.id) : null;
-    setOverDropId(id && parseDropTarget(id) ? id : null);
+  const previewForEvent = (event: DragMoveEvent | DragEndEvent, block: ScheduleBlock): CalendarDragPreview | null => {
+    const day = event.over ? parseDayDropTarget(String(event.over.id)) : null;
+    const translatedTop = event.active.rect.current.translated?.top;
+    const targetTop = event.over?.rect.top;
+    if (!day || translatedTop === undefined || targetTop === undefined) return null;
+    const duration = toMinutes(block.end) - toMinutes(block.start);
+    const rawStart = gridRange.start + ((translatedTop - targetTop) / CALENDAR_HOUR_HEIGHT) * 60;
+    const snapped = Math.round(rawStart / CALENDAR_SNAP_MINUTES) * CALENDAR_SNAP_MINUTES;
+    const requested = Math.max(gridRange.start, Math.min(gridRange.end - duration, snapped));
+    const start = toTime(requested);
+    const end = toTime(requested + duration);
+    return { day, start, end, outcome: moveBlockWithCascade(state.plan, result, block, day, start, state.fixedEvents) };
+  };
+
+  const handleDragMove = (event: DragMoveEvent) => {
+    if (!activeBlock) return;
+    setDragPreview(previewForEvent(event, activeBlock));
   };
 
   const clearDrag = () => {
     setActiveBlock(null);
-    setOverDropId(null);
+    setDragPreview(null);
   };
 
-  const handleDragEnd = ({ active, over }: DragEndEvent) => {
-    const id = over ? String(over.id) : "";
-    const target = parseDropTarget(id);
-    const block = activeBlock ?? DAY_KEYS.flatMap((day) => result.blocks[day]).find((item) => item.id === String(active.id));
-    const slot = dropSlots.get(id);
+  const handleDragEnd = (event: DragEndEvent) => {
+    const block = activeBlock ?? DAY_KEYS.flatMap((day) => result.blocks[day]).find((item) => item.id === String(event.active.id));
+    const preview = block ? previewForEvent(event, block) : null;
     clearDrag();
-    if (!target || !block || !slot) return;
-    onBlockDrop(block, target.day, target.period);
+    if (!block || !preview) return;
+    if (!preview.outcome.ok) return onNotify(preview.outcome.error);
+    onBlockDrop(block, preview.day, preview.start);
   };
 
   const exportPdf = async () => {
@@ -699,16 +740,17 @@ function Results({ state, scheduleRef, onBack, onRegenerate, onBlockAction, onBl
 
   return (
     <section className="results-page page-enter">
-      <div className="result-top no-print"><div><span className="eyebrow">4 · {isElementary ? "함께 보고 맞추기" : "직접 보고 조정하기"}</span><h1>{isElementary ? "짜잔! 우리 가족의 방학 리듬이에요." : "내 생활에 맞는 방학 시간표가 완성됐어요."}</h1><p>Google Calendar처럼 활동 블록 전체를 잡고 원하는 요일과 시간대로 옮겨보세요. {level === "middle" ? "활동은 1시간 단위로 배치돼요." : level === "high" ? "활동은 30분 단위로 정밀하게 배치돼요." : "오전·오후의 여유를 보며 조정할 수 있어요."}</p></div><div className="export-actions"><button className="secondary-button" onClick={onPrint}>🖨️ 바로 인쇄</button><button className="secondary-button" disabled={busy} onClick={onDownload}>{busy ? "이미지 만드는 중..." : "↓ 주간 PNG"}</button></div></div>
+      <div className="result-top no-print"><div><span className="eyebrow">4 · {isElementary ? "함께 보고 맞추기" : "직접 보고 조정하기"}</span><h1>{isElementary ? "짜잔! 우리 가족의 방학 리듬이에요." : "내 생활에 맞는 방학 시간표가 완성됐어요."}</h1><p>블록을 가로로 옮기면 요일이, 세로로 옮기면 시간이 바뀌어요. 겹치는 일반 일정은 같은 날의 뒤 시간으로 자연스럽게 밀립니다.</p></div><div className="export-actions"><button className="secondary-button" onClick={onPrint}>🖨️ 바로 인쇄</button><button className="secondary-button" disabled={busy} onClick={onDownload}>{busy ? "이미지 만드는 중..." : "↓ 주간 PNG"}</button></div></div>
       {result.warnings.length > 0 && <div className="warning-stack no-print">{result.warnings.map((warning) => <article className={warning.tone} key={warning.id}><span>{warning.tone === "warning" ? "⚠️" : "🌿"}</span><div><b>{warning.title}</b><p>{warning.description}</p></div></article>)}</div>}
       <div className="schedule-view-toggle no-print" aria-label="일정 보기 방식"><button className={viewMode === "weekly" ? "active" : ""} onClick={() => changeView("weekly")}>반복 주간 일정</button><button className={viewMode === "vacation" ? "active" : ""} onClick={() => changeView("vacation")}>방학기간 전체 일정 <span>{weeks.length}주</span></button></div>
       {viewMode === "weekly" ? <div className="schedule-export" ref={scheduleRef}>
         <div className="print-title"><div><span>방학한칸</span><h2>{state.plan.nickname ? `${state.plan.nickname}의` : isElementary ? "우리 가족" : "나의"} 방학 시간표</h2><p>{state.plan.startDate.replaceAll("-", ".")} — {state.plan.endDate.replaceAll("-", ".")} · {schoolGradeLabel(state.plan)}</p></div><div className="print-motto">균형 있게,<br />나답게!</div></div>
-        <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragCancel={clearDrag} onDragEnd={handleDragEnd}>
-          <div className={`calendar-drag-guide no-print ${activeBlock ? "active" : ""}`} aria-live="polite">{activeBlock ? <><span className="drag-pulse">↕</span><div><b>{activeBlock.icon} {activeBlock.title} 이동 중</b><p>{overDropId && dropSlots.get(overDropId) ? `${DAY_LABELS[parseDropTarget(overDropId)!.day]}요일 ${parseDropTarget(overDropId)!.period === "morning" ? "오전" : "오후"} ${dropSlots.get(overDropId)!.start}에 놓을 수 있어요.` : "원하는 요일의 오전 또는 오후 구역에 놓으세요."}</p></div><kbd>ESC 취소</kbd></> : <><span>☝️</span><div><b>블록 어디든 잡아서 옮겨보세요</b><p>드래그하면 놓을 수 있는 오전·오후와 실제 배치 시각을 미리 보여드려요.</p></div></>}</div>
-          <div className={`week-grid calendar-grid ${activeBlock ? "drag-session" : ""}`}>{DAY_KEYS.map((day) => <DayColumn key={day} day={day} blocks={result.blocks[day]} activeBlock={activeBlock} dropSlots={dropSlots} overDropId={overDropId} onAdd={() => setManualDay(day)} onAction={onBlockAction} />)}</div>
-          <DragOverlay dropAnimation={{ duration: 180, easing: "cubic-bezier(.2,.8,.2,1)" }}>{activeBlock ? <CalendarDragOverlay block={activeBlock} targetId={overDropId} slot={overDropId ? dropSlots.get(overDropId) : null} /> : null}</DragOverlay>
+        <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragStart={handleDragStart} onDragMove={handleDragMove} onDragCancel={clearDrag} onDragEnd={handleDragEnd}>
+          <div className={`calendar-drag-guide no-print ${activeBlock ? "active" : ""} ${dragPreview && !dragPreview.outcome.ok ? "invalid" : ""}`} aria-live="polite">{activeBlock ? <><span className="drag-pulse">↕</span><div><b>{activeBlock.icon} {activeBlock.title} 이동 중</b><p>{dragPreview ? dragPreview.outcome.ok ? `${DAY_LABELS[dragPreview.day]}요일 ${dragPreview.start}–${dragPreview.end}${dragPreview.outcome.shifted.length ? ` · ${dragPreview.outcome.shifted.length}개 일정이 뒤로 이동` : "에 놓기"}` : `${DAY_LABELS[dragPreview.day]}요일 ${dragPreview.start} · ${dragPreview.outcome.error}` : "원하는 요일과 시각으로 천천히 옮겨보세요."}</p></div><kbd>ESC 취소</kbd></> : <><span>☝️</span><div><b>블록을 원하는 요일과 시각으로 옮겨보세요</b><p>10분 단위로 맞춰지고, 겹치는 일정은 뒤로 밀린 결과를 미리 보여드려요.</p></div></>}</div>
+          <TimeGridCalendar state={state} range={gridRange} activeBlock={activeBlock} preview={dragPreview} onAdd={setManualDay} onAction={onBlockAction} />
+          <DragOverlay dropAnimation={{ duration: 260, easing: "cubic-bezier(.18,.85,.2,1)" }}>{activeBlock ? <CalendarDragOverlay block={activeBlock} preview={dragPreview} /> : null}</DragOverlay>
         </DndContext>
+        <CompactWeekGrid result={result} />
         <div className="result-bottom">
           <article className="free-note"><span>☁️</span><div><b>빈 시간도 계획이에요</b><p>{isElementary ? "심심하면 새로운 놀이가 떠오를 수 있어요. 하루를 꼭 가득 채우지 않아도 괜찮아요." : "회복하거나 그날의 컨디션에 맞춰 선택할 시간을 남겨두세요. 모든 시간을 채울 필요는 없습니다."}</p></div></article>
           <article className="summary-note"><b>이번 주 한눈에</b><span>선택한 활동 <strong>{totalActivities}</strong>칸</span><span>특별한 기간 <strong>{state.exceptions.length}</strong>개</span></article>
@@ -725,37 +767,50 @@ function Results({ state, scheduleRef, onBack, onRegenerate, onBlockAction, onBl
   );
 }
 
-function blockDropPeriod(block: ScheduleBlock): DropPeriod {
-  if (block.period !== "fixed") return block.period;
-  return block.start < "12:00" ? "morning" : "afternoon";
+function TimeGridCalendar({ state, range, activeBlock, preview, onAdd, onAction }: { state: PlannerState; range: CalendarRange; activeBlock: ScheduleBlock | null; preview: CalendarDragPreview | null; onAdd: (day: DayKey) => void; onAction: (block: ScheduleBlock, action: "lock" | "delete" | "move") => void }) {
+  const marks = Array.from({ length: Math.ceil((range.end - range.start) / 60) }, (_, index) => range.start + index * 60);
+  const style = { "--calendar-height": `${((range.end - range.start) / 60) * CALENDAR_HOUR_HEIGHT}px`, "--hour-height": `${CALENDAR_HOUR_HEIGHT}px` } as CSSProperties;
+  return <div className="time-grid-scroll no-print"><div className={`time-grid ${activeBlock ? "drag-session" : ""}`} style={style}>
+    <div className="time-axis-header">시간</div>
+    {DAY_KEYS.map((day) => <header className={`time-day-header ${day === "sat" || day === "sun" ? "weekend" : ""}`} key={`header-${day}`}><div><b>{DAY_LABELS[day]}</b><span>요일</span></div><button type="button" aria-label={`${DAY_LABELS[day]}요일 일정 추가`} onClick={() => onAdd(day)}>+</button></header>)}
+    <div className="time-axis-body">{marks.map((minute) => <span key={minute} style={{ top: `${((minute - range.start) / 60) * CALENDAR_HOUR_HEIGHT}px` }}>{toTime(minute)}</span>)}</div>
+    {DAY_KEYS.map((day) => <TimeDayBody key={day} day={day} plan={state.plan} blocks={state.result!.blocks[day]} range={range} activeBlock={activeBlock} preview={preview?.day === day ? preview : null} onAction={onAction} />)}
+  </div></div>;
 }
 
-function DayColumn({ day, blocks, activeBlock, dropSlots, overDropId, onAdd, onAction }: { day: DayKey; blocks: ScheduleBlock[]; activeBlock: ScheduleBlock | null; dropSlots: Map<string, DropSlot | null>; overDropId: string | null; onAdd: () => void; onAction: (block: ScheduleBlock, action: "lock" | "delete" | "move") => void }) {
-  return <article className={`day-column ${day === "sat" || day === "sun" ? "weekend" : ""}`}><header><div className="day-name"><span>{DAY_LABELS[day]}</span><small>요일</small></div><button type="button" className="day-add-button no-print" aria-label={`${DAY_LABELS[day]}요일 일정 추가`} onClick={onAdd}>+</button></header><div className="day-blocks">{(["morning", "afternoon"] as DropPeriod[]).map((period) => {
-    const id = `slot:${day}:${period}`;
-    return <PeriodDropZone key={id} id={id} period={period} blocks={blocks.filter((block) => blockDropPeriod(block) === period)} activeBlock={activeBlock} slot={dropSlots.get(id)} isCurrentTarget={overDropId === id} onAction={onAction} />;
-  })}</div></article>;
-}
-
-function PeriodDropZone({ id, period, blocks, activeBlock, slot, isCurrentTarget, onAction }: { id: string; period: DropPeriod; blocks: ScheduleBlock[]; activeBlock: ScheduleBlock | null; slot: DropSlot | null | undefined; isCurrentTarget: boolean; onAction: (block: ScheduleBlock, action: "lock" | "delete" | "move") => void }) {
-  const { isOver, setNodeRef } = useDroppable({ id, disabled: Boolean(activeBlock && !slot) });
-  const dragging = Boolean(activeBlock);
-  const available = !dragging || Boolean(slot);
-  return <section ref={setNodeRef} className={`period-drop-zone ${period} ${dragging ? "drag-ready" : ""} ${isOver || isCurrentTarget ? "drop-target" : ""} ${!available ? "drop-unavailable" : ""}`}>
-    <header><b>{period === "morning" ? "오전" : "오후"}</b>{dragging && <span>{available ? isOver || isCurrentTarget ? `${slot!.start}–${slot!.end}에 놓기` : "여기로 이동" : "빈 시간 없음"}</span>}</header>
-    {isCurrentTarget && available && <div className="drop-preview"><span>+</span><b>{activeBlock!.title}</b><small>{slot!.start}–{slot!.end}</small></div>}
-    <div className="period-blocks">{blocks.map((block) => <DraggableScheduleBlock key={block.id} block={block} onAction={onAction} />)}{!blocks.length && !dragging && <div className="empty-period"><span>＋</span><small>비어 있어요</small></div>}</div>
+function TimeDayBody({ day, plan, blocks, range, activeBlock, preview, onAction }: { day: DayKey; plan: PlannerState["plan"]; blocks: ScheduleBlock[]; range: CalendarRange; activeBlock: ScheduleBlock | null; preview: CalendarDragPreview | null; onAction: (block: ScheduleBlock, action: "lock" | "delete" | "move") => void }) {
+  const { isOver, setNodeRef } = useDroppable({ id: `day:${day}` });
+  const awake = awakeRange(plan, day);
+  const beforeHeight = ((awake.start - range.start) / 60) * CALENDAR_HOUR_HEIGHT;
+  const afterTop = ((awake.end - range.start) / 60) * CALENDAR_HOUR_HEIGHT;
+  const afterHeight = ((range.end - awake.end) / 60) * CALENDAR_HOUR_HEIGHT;
+  const shifts = preview?.outcome.ok ? new Map(preview.outcome.shifted.map((item) => [item.blockId, item])) : new Map();
+  return <section ref={setNodeRef} className={`time-day-body ${isOver ? "is-over" : ""} ${preview && !preview.outcome.ok ? "invalid" : ""}`} aria-label={`${DAY_LABELS[day]}요일 시간표`}>
+    {beforeHeight > 0 && <div className="sleep-mask before" style={{ height: `${beforeHeight}px` }}><span>취침</span></div>}
+    {afterHeight > 0 && <div className="sleep-mask after" style={{ top: `${afterTop}px`, height: `${afterHeight}px` }}><span>취침</span></div>}
+    {blocks.map((block) => {
+      const shifted = shifts.get(block.id);
+      return <TimeScheduleBlock key={block.id} block={block} range={range} visualStart={shifted?.start} visualEnd={shifted?.end} previewShifted={Boolean(shifted)} onAction={onAction} />;
+    })}
+    {preview && activeBlock && <div className={`time-drop-preview category-${activeBlock.category} ${preview.outcome.ok ? "" : "invalid"}`} style={timeBlockStyle(preview.start, preview.end, range)}><b>{activeBlock.icon} {activeBlock.title}</b><span>{preview.start}–{preview.end}</span>{preview.outcome.ok && preview.outcome.shifted.length > 0 && <small>{preview.outcome.shifted.length}개 일정 밀기</small>}</div>}
   </section>;
 }
 
-function DraggableScheduleBlock({ block, onAction }: { block: ScheduleBlock; onAction: (block: ScheduleBlock, action: "lock" | "delete" | "move") => void }) {
+function TimeScheduleBlock({ block, range, visualStart, visualEnd, previewShifted, onAction }: { block: ScheduleBlock; range: CalendarRange; visualStart?: string; visualEnd?: string; previewShifted: boolean; onAction: (block: ScheduleBlock, action: "lock" | "delete" | "move") => void }) {
   const canDrag = block.kind !== "fixed" && !block.locked;
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: block.id, disabled: !canDrag });
-  return <div ref={setNodeRef} className={`schedule-block ${block.kind} category-${block.category} ${canDrag ? "draggable" : ""} ${isDragging ? "dragging" : ""}`} {...(canDrag ? listeners : {})} {...(canDrag ? attributes : {})} aria-label={canDrag ? `${block.title}, ${block.start}부터 ${block.end}까지. 잡아서 이동` : undefined}>
-    {canDrag && <span className="block-grip no-print" aria-hidden="true">⠿</span>}
-    <div className="block-time"><span>{block.period === "fixed" ? `${block.start}–${block.end}` : `${block.start}–${block.end}`}</span>{block.locked && <i title="잠긴 활동">🔒</i>}</div><div className="block-title"><span>{block.icon}</span><b>{block.title}</b></div><p>{block.reason}</p>
-    {block.kind !== "fixed" && <div className="block-controls no-print" onPointerDown={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}><button title={block.locked ? "잠금 풀기" : "잠그기"} onClick={() => onAction(block, "lock")}>{block.locked ? "🔓" : "🔒"}</button><button disabled={block.locked} onClick={() => onAction(block, "move")}>다른 시간</button><button disabled={block.locked || Boolean(block.mustHave)} title={block.mustHave ? "‘꼭 넣어줘!’ 체크를 해제해야 뺄 수 있어요" : "빼기"} onClick={() => onAction(block, "delete")}>×</button></div>}
+  const start = visualStart ?? block.start;
+  const end = visualEnd ?? block.end;
+  return <div ref={setNodeRef} style={timeBlockStyle(start, end, range)} className={`time-schedule-block ${block.kind} category-${block.category} ${canDrag ? "draggable" : ""} ${isDragging ? "dragging" : ""} ${previewShifted ? "preview-shifted" : ""}`} {...(canDrag ? listeners : {})} {...(canDrag ? attributes : {})} aria-label={canDrag ? `${block.title}, ${block.start}부터 ${block.end}까지. 잡아서 이동` : `${block.title}, ${block.start}부터 ${block.end}까지`}>
+    {canDrag && <span className="block-grip" aria-hidden="true">⠿</span>}
+    <span className="time-block-time">{start}–{end}{block.locked ? " 🔒" : ""}</span>
+    <b className="time-block-title">{block.icon} {block.title}</b>
+    {block.kind !== "fixed" && <div className="time-block-controls" onPointerDown={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}><button type="button" aria-label={`${block.title} ${block.locked ? "잠금 풀기" : "잠그기"}`} title={block.locked ? "잠금 풀기" : "잠그기"} onClick={() => onAction(block, "lock")}>{block.locked ? "🔓" : "🔒"}</button><button type="button" aria-label={`${block.title} 다른 빈 시간`} title="다른 빈 시간" disabled={block.locked} onClick={() => onAction(block, "move")}>↻</button><button type="button" aria-label={`${block.title} 빼기`} disabled={block.locked || Boolean(block.mustHave)} title={block.mustHave ? "‘꼭 넣어줘!’ 체크를 해제해야 뺄 수 있어요" : "빼기"} onClick={() => onAction(block, "delete")}>×</button></div>}
   </div>;
+}
+
+function CompactWeekGrid({ result }: { result: NonNullable<PlannerState["result"]> }) {
+  return <div className="week-grid compact-week-grid">{DAY_KEYS.map((day) => <article className={`day-column ${day === "sat" || day === "sun" ? "weekend" : ""}`} key={day}><header><div className="day-name"><span>{DAY_LABELS[day]}</span><small>요일</small></div></header><div className="day-blocks">{result.blocks[day].map((block) => <div className={`schedule-block ${block.kind} category-${block.category}`} key={block.id}><div className="block-time"><span>{block.start}–{block.end}</span>{block.locked && <i>🔒</i>}</div><div className="block-title"><span>{block.icon}</span><b>{block.title}</b></div><p>{block.reason}</p></div>)}</div></article>)}</div>;
 }
 
 function ManualScheduleDialog({ day, onAdd, onClose }: { day: DayKey; onAdd: (day: DayKey, title: string, start: string, end: string) => string | null; onClose: () => void }) {
@@ -785,9 +840,8 @@ function ManualScheduleDialog({ day, onAdd, onClose }: { day: DayKey; onAdd: (da
   </section></div>;
 }
 
-function CalendarDragOverlay({ block, targetId, slot }: { block: ScheduleBlock; targetId: string | null; slot: DropSlot | null | undefined }) {
-  const target = targetId ? parseDropTarget(targetId) : null;
-  return <div className={`calendar-drag-overlay category-${block.category}`}><div><span className="overlay-icon">{block.icon}</span><div><b>{block.title}</b><small>{target && slot ? `${DAY_LABELS[target.day]}요일 · ${target.period === "morning" ? "오전" : "오후"} ${slot.start}–${slot.end}` : "놓을 시간을 찾는 중"}</small></div></div><span className="overlay-grip">⠿</span></div>;
+function CalendarDragOverlay({ block, preview }: { block: ScheduleBlock; preview: CalendarDragPreview | null }) {
+  return <div className={`calendar-drag-overlay category-${block.category} ${preview && !preview.outcome.ok ? "invalid" : ""}`}><div><span className="overlay-icon">{block.icon}</span><div><b>{block.title}</b><small>{preview ? `${DAY_LABELS[preview.day]}요일 · ${preview.start}–${preview.end}` : "요일과 시간을 찾는 중"}</small></div></div><span className="overlay-grip">⠿</span></div>;
 }
 
 function VacationCalendar({ weeks, owner, precise }: { weeks: VacationWeek[]; owner: string; precise: boolean }) {
