@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findAlternativeSlot, findFixedEventConflicts, findSlotOnDay, generateSchedule, MustHaveScheduleError, toMinutes, validateManualScheduleBlock, validatePlan } from "../lib/scheduler";
+import { activityGridMinutes, findAlternativeSlot, findFixedEventConflicts, findSlotOnDay, generateSchedule, MustHaveScheduleError, toMinutes, validateManualScheduleBlock, validatePlan } from "../lib/scheduler";
 import { buildVacationWeeks } from "../lib/vacation";
 import { ActivityPreference, FixedEvent, VacationPlan } from "../lib/types";
 
@@ -98,6 +98,26 @@ describe("schedule generation", () => {
     const result = generateSchedule(tenMinutePlan, [], [activity({ frequency: 1, durationMinutes: 60, mustHave: true })]);
     const placed = Object.values(result.blocks).flat().find((block) => block.sourceId === "reading")!;
     expect(`${placed.start}-${placed.end}`).toBe("08:10-09:10");
+  });
+
+  it("keeps legacy plans on the elementary 10-minute activity grid", () => {
+    expect(activityGridMinutes(plan)).toBe(10);
+  });
+
+  it("aligns middle-school generated activities to full-hour starts", () => {
+    const middlePlan: VacationPlan = { ...plan, schoolLevel: "middle", grade: "2", lifeHours: { weekdayWake: "08:10", weekdaySleep: "12:10", weekendWake: "08:10", weekendSleep: "12:10" } };
+    const result = generateSchedule(middlePlan, [], [activity({ frequency: 1, durationMinutes: 60, mustHave: true })]);
+    const placed = Object.values(result.blocks).flat().find((block) => block.sourceId === "reading")!;
+    expect(activityGridMinutes(middlePlan)).toBe(60);
+    expect(toMinutes(placed.start) % 60).toBe(0);
+  });
+
+  it("aligns high-school generated activities to 30-minute starts", () => {
+    const highPlan: VacationPlan = { ...plan, schoolLevel: "high", grade: "1", lifeHours: { weekdayWake: "08:10", weekdaySleep: "12:10", weekendWake: "08:10", weekendSleep: "12:10" } };
+    const result = generateSchedule(highPlan, [], [activity({ frequency: 1, durationMinutes: 60, mustHave: true })]);
+    const placed = Object.values(result.blocks).flat().find((block) => block.sourceId === "reading")!;
+    expect(activityGridMinutes(highPlan)).toBe(30);
+    expect(toMinutes(placed.start) % 30).toBe(0);
   });
 
   it("lets required activities exceed the soft daily activity cap", () => {

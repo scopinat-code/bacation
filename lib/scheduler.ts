@@ -8,10 +8,18 @@ import {
   ScheduleResult,
   ScheduleWarning,
   VacationPlan,
+  schoolLevelOf,
 } from "./types";
 
 type Interval = { start: number; end: number; category?: string };
-const SLOT_MINUTES = 10;
+const LIFE_TIME_INCREMENT = 10;
+
+export function activityGridMinutes(plan: Pick<VacationPlan, "schoolLevel">): number {
+  const level = schoolLevelOf(plan);
+  if (level === "middle") return 60;
+  if (level === "high") return 30;
+  return 10;
+}
 
 export class MustHaveScheduleError extends Error {
   constructor(message: string) {
@@ -49,7 +57,7 @@ export function validatePlan(plan: VacationPlan): string[] {
   const lifeTimes = Object.values(plan.lifeHours).map(toMinutes);
   if (!plan.startDate || !plan.endDate) errors.push("방학 시작일과 종료일을 모두 골라주세요.");
   if (plan.startDate && plan.endDate && plan.startDate > plan.endDate) errors.push("방학 종료일은 시작일보다 뒤여야 해요.");
-  if (lifeTimes.some((time) => Number.isFinite(time) && time % SLOT_MINUTES !== 0)) errors.push("일어나고 자는 시간은 10분 단위로 골라주세요.");
+  if (lifeTimes.some((time) => Number.isFinite(time) && time % LIFE_TIME_INCREMENT !== 0)) errors.push("일어나고 자는 시간은 10분 단위로 골라주세요.");
   if (toMinutes(plan.lifeHours.weekdayWake) >= toMinutes(plan.lifeHours.weekdaySleep)) errors.push("평일 취침 시간은 기상 시간보다 뒤여야 해요.");
   if (toMinutes(plan.lifeHours.weekendWake) >= toMinutes(plan.lifeHours.weekendSleep)) errors.push("주말 취침 시간은 기상 시간보다 뒤여야 해요.");
   return errors;
@@ -79,12 +87,12 @@ function blankBlocks(): Record<DayKey, ScheduleBlock[]> {
   }, {} as Record<DayKey, ScheduleBlock[]>);
 }
 
-function candidateStarts(range: Interval, duration: number, preference: ActivityPreference["preference"]): number[] {
+function candidateStarts(range: Interval, duration: number, preference: ActivityPreference["preference"], gridMinutes: number): number[] {
   const morningEnd = Math.min(range.end, 12 * 60);
   const afternoonStart = Math.max(range.start, 13 * 60);
   const starts: number[] = [];
   const add = (start: number, end: number) => {
-    for (let time = Math.ceil(start / SLOT_MINUTES) * SLOT_MINUTES; time + duration <= end; time += SLOT_MINUTES) starts.push(time);
+    for (let time = Math.ceil(start / gridMinutes) * gridMinutes; time + duration <= end; time += gridMinutes) starts.push(time);
   };
   if (preference === "morning") {
     add(range.start + 30, morningEnd);
@@ -99,9 +107,9 @@ function candidateStarts(range: Interval, duration: number, preference: Activity
   return starts;
 }
 
-function fullRangeStarts(range: Interval, duration: number): number[] {
+function fullRangeStarts(range: Interval, duration: number, gridMinutes: number): number[] {
   const starts: number[] = [];
-  for (let time = Math.ceil(range.start / SLOT_MINUTES) * SLOT_MINUTES; time + duration <= range.end; time += SLOT_MINUTES) starts.push(time);
+  for (let time = Math.ceil(range.start / gridMinutes) * gridMinutes; time + duration <= range.end; time += gridMinutes) starts.push(time);
   return starts;
 }
 
@@ -109,7 +117,8 @@ function sortBlocks(blocks: ScheduleBlock[]) {
   blocks.sort((a, b) => toMinutes(a.start) - toMinutes(b.start));
 }
 
-function addFixedBlocks(events: FixedEvent[], blocks: Record<DayKey, ScheduleBlock[]>, occupied: Record<DayKey, Interval[]>) {
+function addFixedBlocks(plan: VacationPlan, events: FixedEvent[], blocks: Record<DayKey, ScheduleBlock[]>, occupied: Record<DayKey, Interval[]>) {
+  const owner = schoolLevelOf(plan) === "elementary" ? "부모님이 정한" : "학생과 가족이 정한";
   for (const event of events) {
     for (const day of event.days) {
       const start = toMinutes(event.start);
@@ -126,7 +135,7 @@ function addFixedBlocks(events: FixedEvent[], blocks: Record<DayKey, ScheduleBlo
         end: event.end,
         period: "fixed",
         kind: "fixed",
-        reason: event.bufferMinutes ? `부모님이 정한 고정 일정 · 앞뒤 ${event.bufferMinutes}분 여유 포함` : "부모님이 정한 고정 일정",
+        reason: event.bufferMinutes ? `${owner} 고정 일정 · 앞뒤 ${event.bufferMinutes}분 여유 포함` : `${owner} 고정 일정`,
         locked: true,
       });
     }
@@ -138,8 +147,9 @@ type RequiredPlacement = { activity: ActivityPreference; day: DayKey; start: num
 
 function requiredCandidates(plan: VacationPlan, activity: ActivityPreference, occupied: Record<DayKey, Interval[]>): RequiredCandidate[] {
   const candidates: RequiredCandidate[] = [];
+  const gridMinutes = activityGridMinutes(plan);
   for (const day of DAY_KEYS) {
-    for (const start of fullRangeStarts(lifeRange(plan, day), activity.durationMinutes)) {
+    for (const start of fullRangeStarts(lifeRange(plan, day), activity.durationMinutes, gridMinutes)) {
       const interval = { start, end: start + activity.durationMinutes };
       if (!occupied[day].some((item) => overlaps(interval, item))) candidates.push({ day, start });
     }
@@ -214,7 +224,7 @@ function placeRequiredActivities(
       end: toTime(end),
       period,
       kind: "activity",
-      reason: "‘꼭 넣어줘!’로 고른 활동을 빠짐없이 먼저 배치했어요.",
+      reason: schoolLevelOf(plan) === "elementary" ? "‘꼭 넣어줘!’로 고른 활동을 빠짐없이 먼저 배치했어요." : "‘반드시 포함’으로 선택한 활동을 빠짐없이 먼저 배치했어요.",
       locked: false,
       mustHave: true,
     });
@@ -229,7 +239,9 @@ export function generateSchedule(plan: VacationPlan, fixedEvents: FixedEvent[], 
   const occupied = Object.fromEntries(DAY_KEYS.map((day) => [day, [] as Interval[]])) as Record<DayKey, Interval[]>;
   const warnings: ScheduleWarning[] = [];
   const unplaced: ScheduleResult["unplaced"] = [];
-  addFixedBlocks(fixedEvents, blocks, occupied);
+  addFixedBlocks(plan, fixedEvents, blocks, occupied);
+  const gridMinutes = activityGridMinutes(plan);
+  const level = schoolLevelOf(plan);
 
   const selected = activities.filter((activity) => activity.selected && activity.frequency > 0);
   const required = selected.filter((activity) => activity.mustHave);
@@ -244,8 +256,9 @@ export function generateSchedule(plan: VacationPlan, fixedEvents: FixedEvent[], 
       for (const day of DAY_KEYS) {
         const range = lifeRange(plan, day);
         const activityCount = blocks[day].filter((block) => block.kind === "activity").length;
-        if (activityCount >= (isWeekend(day) ? 3 : 2)) continue;
-        for (const start of candidateStarts(range, activity.durationMinutes, activity.preference)) {
+        const dailyCap = level === "elementary" ? (isWeekend(day) ? 3 : 2) : level === "middle" ? 4 : (isWeekend(day) ? 5 : 6);
+        if (activityCount >= dailyCap) continue;
+        for (const start of candidateStarts(range, activity.durationMinutes, activity.preference, gridMinutes)) {
           const interval = { start, end: start + activity.durationMinutes };
           if (occupied[day].some((item) => overlaps(interval, item))) continue;
           const period = start < 12 * 60 ? "morning" : "afternoon";
@@ -308,7 +321,7 @@ export function validateManualScheduleBlock(
   const start = toMinutes(startValue);
   const end = toMinutes(endValue);
   if (!startValue || !endValue || start >= end) return "종료 시각은 시작 시각보다 뒤여야 해요.";
-  if (start % SLOT_MINUTES || end % SLOT_MINUTES) return "시각은 10분 단위로 골라주세요.";
+  if (start % LIFE_TIME_INCREMENT || end % LIFE_TIME_INCREMENT) return "시각은 10분 단위로 골라주세요.";
   const range = lifeRange(plan, day);
   if (start < range.start || end > range.end) {
     return `${DAY_LABELS[day]}요일의 기상·취침 시간 안에서 골라주세요.`;
@@ -337,7 +350,7 @@ export function findSlotOnDay(
   const occupied = result.blocks[day]
     .filter((item) => item.id !== block.id)
     .map((item) => ({ start: toMinutes(item.start), end: toMinutes(item.end) }));
-  const starts = candidateStarts(range, duration, preferredPeriod ?? (block.period === "fixed" ? "any" : block.period))
+  const starts = candidateStarts(range, duration, preferredPeriod ?? (block.period === "fixed" ? "any" : block.period), activityGridMinutes(plan))
     .filter((start) => !preferredPeriod || (preferredPeriod === "morning" ? start < 12 * 60 : start >= 13 * 60));
   for (const start of starts) {
     if (day === block.day && start === toMinutes(block.start)) continue;

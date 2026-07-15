@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { ADMIN_COOKIE, adminAuthConfigured, verifyAdminSession } from "@/lib/admin-auth";
 import { getAnalyticsSummary } from "@/lib/analytics-db";
+import QnaAdminPanel from "./QnaAdminPanel";
 import styles from "./admin.module.css";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       <div className={styles.brand}><span className={styles.mark}>한칸</span><div><h1>관리자 로그인</h1><p>방학한칸 이용 현황은 관리자만 볼 수 있어요.</p></div></div>
       {!configured && <p className={styles.error}>Cloudtype에 ADMIN_PASSWORD와 ADMIN_SESSION_SECRET을 먼저 설정해 주세요.</p>}
       {params.error === "invalid" && <p className={styles.error}>비밀번호가 맞지 않습니다.</p>}
+      {params.error === "rate-limit" && <p className={styles.error}>로그인을 여러 번 시도했습니다. 잠시 후 다시 시도해 주세요.</p>}
       {params.error === "config" && <p className={styles.error}>관리자 환경변수 설정을 확인해 주세요.</p>}
       <form action="/admin/login" method="post">
         <label>관리자 비밀번호<input type="password" name="password" required autoComplete="current-password" /></label>
@@ -59,5 +61,6 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     <section className={styles.section}><h2>파일 이용</h2><div className={styles.downloads}>
       <span>전체 세션 {summary.totalSessions.toLocaleString()}</span><span>PNG {summary.pngDownloads.toLocaleString()}회</span><span>PDF {summary.pdfDownloads.toLocaleString()}회</span><span>PPTX {summary.pptxDownloads.toLocaleString()}회</span><span>인쇄 {summary.prints.toLocaleString()}회</span>
     </div></section>
+    <QnaAdminPanel />
   </div></main>;
 }

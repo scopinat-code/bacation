@@ -1,4 +1,4 @@
-import { DAY_KEYS, DAY_LABELS, DayKey, PlannerState, ScheduleBlock } from "./types";
+import { DAY_KEYS, DAY_LABELS, DayKey, PlannerState, ScheduleBlock, schoolGradeLabel, schoolLevelOf, studentNoun } from "./types";
 import { buildVacationWeeks, VacationDay } from "./vacation";
 
 export type ExportScope = "weekly" | "vacation";
@@ -54,14 +54,14 @@ export async function downloadSchedulePdf(nodes: HTMLElement[], filename: string
   pdf.save(filename);
 }
 
-function periodText(block: ScheduleBlock) {
-  if (block.kind === "fixed" || block.kind === "manual") return `${block.start}-${block.end}`;
+function periodText(block: ScheduleBlock, precise: boolean) {
+  if (block.kind === "fixed" || block.kind === "manual" || precise) return `${block.start}-${block.end}`;
   return block.period === "morning" ? "오전" : "오후";
 }
 
 type SlideDay = { title: string; subtitle?: string; blocks: ScheduleBlock[]; dimmed?: boolean };
 
-function addScheduleSlide(pptx: any, title: string, subtitle: string, days: SlideDay[]) {
+function addScheduleSlide(pptx: any, title: string, subtitle: string, days: SlideDay[], precise: boolean, footer: string) {
   const slide = pptx.addSlide();
   slide.background = { color: COLORS.paper };
   slide.addText(title, { x: 0.45, y: 0.25, w: 8.9, h: 0.55, fontFace: "Malgun Gothic", fontSize: 25, bold: true, color: COLORS.ink, margin: 0, breakLine: false, fit: "shrink" });
@@ -92,25 +92,27 @@ function addScheduleSlide(pptx: any, title: string, subtitle: string, days: Slid
       const y = columnY + 0.68 + blockIndex * (cardHeight + cardGap);
       slide.addShape(pptx.ShapeType.roundRect, { x: x + 0.08, y, w: columnWidth - 0.16, h: cardHeight, rectRadius: 0.04, fill: { color: CATEGORY_COLORS[block.category] ?? COLORS.white }, line: { color: COLORS.ink, width: 0.75, dash: block.kind === "fixed" ? "dash" : "solid" } });
       slide.addText(`${block.icon} ${block.title}`, { x: x + 0.17, y: y + 0.12, w: columnWidth - 0.34, h: Math.max(0.18, cardHeight - 0.27), fontFace: "Malgun Gothic", fontSize: 12, bold: true, color: COLORS.ink, margin: 0, fit: "shrink", valign: "mid" });
-      slide.addText(periodText(block), { x: x + 0.17, y: y + 0.03, w: columnWidth - 0.34, h: 0.13, fontFace: "Malgun Gothic", fontSize: 7.5, bold: true, color: "66736D", margin: 0, fit: "shrink" });
+      slide.addText(periodText(block, precise), { x: x + 0.17, y: y + 0.03, w: columnWidth - 0.34, h: 0.13, fontFace: "Malgun Gothic", fontSize: 7.5, bold: true, color: "66736D", margin: 0, fit: "shrink" });
     });
   });
-  slide.addText("방학한칸 · 부모의 고정 일정과 아이의 선택을 함께 담았어요.", { x: 0.45, y: 7.18, w: 12.4, h: 0.16, fontFace: "Malgun Gothic", fontSize: 8, color: "78857F", align: "center", margin: 0 });
+  slide.addText(footer, { x: 0.45, y: 7.18, w: 12.4, h: 0.16, fontFace: "Malgun Gothic", fontSize: 8, color: "78857F", align: "center", margin: 0 });
 }
 
 function addCoverSlide(pptx: any, state: PlannerState, scope: ExportScope, pageCount: number) {
+  const level = schoolLevelOf(state.plan);
+  const owner = state.plan.nickname || (level === "elementary" ? "우리 가족" : "나");
   const slide = pptx.addSlide();
   slide.background = { color: COLORS.paper };
   slide.addShape(pptx.ShapeType.ellipse, { x: 10.45, y: 0.65, w: 1.7, h: 1.7, fill: { color: COLORS.yellow }, line: { color: COLORS.ink, width: 1.5 } });
-  slide.addText("느슨하게,\n신나게!", { x: 10.72, y: 1.06, w: 1.16, h: 0.73, fontFace: "Malgun Gothic", fontSize: 17, bold: true, align: "center", valign: "mid", color: COLORS.ink, margin: 0 });
+  slide.addText("균형 있게,\n나답게!", { x: 10.72, y: 1.06, w: 1.16, h: 0.73, fontFace: "Malgun Gothic", fontSize: 17, bold: true, align: "center", valign: "mid", color: COLORS.ink, margin: 0 });
   slide.addText("방학한칸", { x: 0.72, y: 0.72, w: 2, h: 0.3, fontFace: "Malgun Gothic", fontSize: 16, bold: true, color: COLORS.coral, margin: 0 });
-  slide.addText(`${state.plan.nickname || "우리 가족"}의\n여름방학 시간표`, { x: 0.72, y: 1.55, w: 8.8, h: 1.55, fontFace: "Malgun Gothic", fontSize: 38, bold: true, color: COLORS.ink, margin: 0, breakLine: false, fit: "shrink" });
-  slide.addText(`${state.plan.startDate.replaceAll("-", ".")} - ${state.plan.endDate.replaceAll("-", ".")} · 초등 ${state.plan.grade}학년`, { x: 0.75, y: 3.38, w: 8.8, h: 0.35, fontFace: "Malgun Gothic", fontSize: 16, color: "66736D", margin: 0 });
+  slide.addText(`${owner}의\n방학 시간표`, { x: 0.72, y: 1.55, w: 8.8, h: 1.55, fontFace: "Malgun Gothic", fontSize: 38, bold: true, color: COLORS.ink, margin: 0, breakLine: false, fit: "shrink" });
+  slide.addText(`${state.plan.startDate.replaceAll("-", ".")} - ${state.plan.endDate.replaceAll("-", ".")} · ${schoolGradeLabel(state.plan)}`, { x: 0.75, y: 3.38, w: 8.8, h: 0.35, fontFace: "Malgun Gothic", fontSize: 16, color: "66736D", margin: 0 });
   slide.addShape(pptx.ShapeType.roundRect, { x: 0.72, y: 4.45, w: 11.9, h: 1.6, rectRadius: 0.08, fill: { color: COLORS.white }, line: { color: COLORS.ink, width: 1.3 } });
   slide.addText(scope === "weekly" ? "매주 반복하는 생활 리듬" : `${pageCount}주 동안 이어지는 방학 전체 일정`, { x: 1.05, y: 4.82, w: 7.2, h: 0.42, fontFace: "Malgun Gothic", fontSize: 23, bold: true, color: COLORS.ink, margin: 0 });
   slide.addText("각 일정은 PowerPoint 안에서 직접 선택하고 수정할 수 있어요.", { x: 1.05, y: 5.34, w: 8.2, h: 0.28, fontFace: "Malgun Gothic", fontSize: 14, color: "66736D", margin: 0 });
   slide.addText("📌 고정 일정", { x: 9.15, y: 4.8, w: 1.4, h: 0.35, fontFace: "Malgun Gothic", fontSize: 14, bold: true, color: COLORS.ink, margin: 0 });
-  slide.addText("⭐ 아이 활동", { x: 10.7, y: 4.8, w: 1.4, h: 0.35, fontFace: "Malgun Gothic", fontSize: 14, bold: true, color: COLORS.ink, margin: 0 });
+  slide.addText(`⭐ ${studentNoun(state.plan)} 활동`, { x: 10.7, y: 4.8, w: 1.4, h: 0.35, fontFace: "Malgun Gothic", fontSize: 14, bold: true, color: COLORS.ink, margin: 0 });
 }
 
 function weeklyDays(state: PlannerState): SlideDay[] {
@@ -131,18 +133,22 @@ export async function downloadSchedulePptx(state: PlannerState, scope: ExportSco
   const module = await import("pptxgenjs");
   const PptxGenJS = module.default;
   const pptx = new PptxGenJS();
+  const level = schoolLevelOf(state.plan);
+  const owner = state.plan.nickname || (level === "elementary" ? "우리 가족" : "나");
+  const precise = level !== "elementary";
+  const footer = level === "elementary" ? "방학한칸 · 부모의 고정 일정과 아이의 선택을 함께 담았어요." : "방학한칸 · 학생의 선택과 가족의 고정 일정을 균형 있게 담았어요.";
   pptx.layout = "LAYOUT_WIDE";
   pptx.author = "방학한칸";
-  pptx.subject = "여름방학 생활계획표";
-  pptx.title = `${state.plan.nickname || "우리 가족"}의 여름방학 시간표`;
+  pptx.subject = "방학 생활계획표";
+  pptx.title = `${owner}의 방학 시간표`;
   pptx.company = "방학한칸";
   pptx.theme = { headFontFace: "Malgun Gothic", bodyFontFace: "Malgun Gothic" };
   const weeks = buildVacationWeeks(state.plan, state.result, state.exceptions);
   addCoverSlide(pptx, state, scope, scope === "weekly" ? 1 : weeks.length);
   if (scope === "weekly") {
-    addScheduleSlide(pptx, "매주 반복하는 우리 가족 시간표", "고정 일정은 정확한 시각, 아이 활동은 오전·오후로 표시했어요.", weeklyDays(state));
+    addScheduleSlide(pptx, `매주 반복하는 ${level === "elementary" ? "우리 가족" : "나의"} 시간표`, precise ? `선택한 활동을 ${level === "middle" ? "1시간" : "30분"} 단위의 정확한 시각으로 표시했어요.` : "고정 일정은 정확한 시각, 아이 활동은 오전·오후로 표시했어요.", weeklyDays(state), precise, footer);
   } else {
-    weeks.forEach((week, index) => addScheduleSlide(pptx, `${index + 1}주차 · ${week.label}`, "특별 일정 기간은 반복 일정보다 먼저 보여요.", vacationSlideDays(week.days)));
+    weeks.forEach((week, index) => addScheduleSlide(pptx, `${index + 1}주차 · ${week.label}`, "특별 일정 기간은 반복 일정보다 먼저 보여요.", vacationSlideDays(week.days), precise, footer));
   }
   const filename = `${safeName(state.plan.nickname)}-${scope === "weekly" ? "주간" : "방학전체"}-시간표.pptx`;
   await pptx.writeFile({ fileName: filename });

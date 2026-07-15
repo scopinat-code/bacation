@@ -42,6 +42,7 @@ export const adminCookieOptions = {
   httpOnly: true,
   sameSite: "strict" as const,
   secure: process.env.NODE_ENV === "production",
-  path: "/admin",
+  // 관리자 전용 API(/api/qna/admin)에도 세션 쿠키를 전송합니다.
+  path: "/",
   maxAge: SESSION_DURATION_SECONDS,
 };
