@@ -21,7 +21,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     const configured = adminAuthConfigured();
     return <main className={styles.page}><section className={styles.login}>
       <div className={styles.brand}><span className={styles.mark}>한칸</span><div><h1>관리자 로그인</h1><p>방학한칸 이용 현황은 관리자만 볼 수 있어요.</p></div></div>
-      {!configured && <p className={styles.error}>Cloudtype에 ADMIN_PASSWORD와 ADMIN_SESSION_SECRET을 먼저 설정해 주세요.</p>}
+      {!configured && <p className={styles.error}>배포 환경에 ADMIN_PASSWORD와 ADMIN_SESSION_SECRET을 먼저 설정해 주세요.</p>}
       {params.error === "invalid" && <p className={styles.error}>비밀번호가 맞지 않습니다.</p>}
       {params.error === "rate-limit" && <p className={styles.error}>로그인을 여러 번 시도했습니다. 잠시 후 다시 시도해 주세요.</p>}
       {params.error === "config" && <p className={styles.error}>관리자 환경변수 설정을 확인해 주세요.</p>}
@@ -58,6 +58,21 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     <section className={styles.section}><h2>최근 14일 방문자</h2><div className={styles.chart}>
       {summary.daily.map((day) => <div className={styles.barItem} key={day.label}><b>{day.visitors}</b><div className={styles.bar} style={{ height: `${Math.max(2, (day.visitors / maxDaily) * 88)}%` }} title={`${day.label} 방문 ${day.visitors}명 · 완성 ${day.completions}명`} /><small>{day.label}</small></div>)}
     </div></section>
+    <section className={styles.section}>
+      <div className={styles.sectionHeading}><div><h2>채널별 유입</h2><p>홍보 링크 뒤에 <code>?ref=naver_cafe</code>처럼 붙이면 해당 이름으로 집계됩니다. <code>utm_source</code>도 사용할 수 있어요.</p></div></div>
+      {summary.channels.length ? <div className={styles.channelTableWrap}><table className={styles.channelTable}>
+        <thead><tr><th>채널</th><th>방문자</th><th>세션</th><th>시작</th><th>완성</th><th>완성률</th><th>저장·인쇄</th></tr></thead>
+        <tbody>{summary.channels.map((channel) => <tr key={channel.channel}>
+          <th><code>{channel.channel}</code></th>
+          <td>{channel.visitors.toLocaleString()}</td>
+          <td>{channel.sessions.toLocaleString()}</td>
+          <td>{channel.starts.toLocaleString()}</td>
+          <td>{channel.completions.toLocaleString()}</td>
+          <td>{channel.completionRate}%</td>
+          <td>{channel.exports.toLocaleString()}</td>
+        </tr>)}</tbody>
+      </table></div> : <div className={styles.channelEmpty}>아직 집계된 유입 채널이 없습니다.</div>}
+    </section>
     <section className={styles.section}><h2>파일 이용</h2><div className={styles.downloads}>
       <span>전체 세션 {summary.totalSessions.toLocaleString()}</span><span>PNG {summary.pngDownloads.toLocaleString()}회</span><span>PDF {summary.pdfDownloads.toLocaleString()}회</span><span>PPTX {summary.pptxDownloads.toLocaleString()}회</span><span>인쇄 {summary.prints.toLocaleString()}회</span>
     </div></section>

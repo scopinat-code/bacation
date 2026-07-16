@@ -36,3 +36,15 @@ npm run build
 ```
 
 PDF는 가로형 A4 한 페이지에 한 주씩 생성됩니다. PPTX는 시간표를 이미지로 붙이지 않고 PowerPoint의 텍스트 상자와 도형으로 구성합니다.
+
+## 홍보 채널별 유입 확인
+
+공개 주소 뒤에 `ref`를 붙여 채널별 방문·시간표 시작·완성·파일 저장을 관리자 화면에서 확인할 수 있습니다.
+
+```text
+https://서비스주소/?ref=naver_cafe
+https://서비스주소/?ref=instagram
+https://서비스주소/?utm_source=teacher_newsletter
+```
+
+`ref`나 `utm_source`가 없으면 네이버·구글·카카오 등 알려진 추천 출처를 자동 분류하고, 추천 출처가 없으면 `direct`로 집계합니다. 전체 추천 URL이나 검색어는 저장하지 않습니다.

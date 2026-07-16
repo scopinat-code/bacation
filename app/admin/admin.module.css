@@ -20,6 +20,9 @@
 .card strong { display: block; margin-top: 15px; font-size: 32px; }
 .section { margin-top: 22px; padding: 22px; border: 2px solid #1f2925; border-radius: 17px; background: #fffdf8; }
 .section h2 { margin: 0 0 18px; font-size: 18px; }
+.sectionHeading h2 { margin-bottom: 5px; }
+.sectionHeading p { margin: 0 0 17px; color: #62706a; font-size: 11px; line-height: 1.6; }
+.sectionHeading code, .channelTable code { padding: 2px 5px; border-radius: 5px; background: #f1f5f3; color: #a73a2b; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .95em; }
 .funnel { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .funnel article { padding: 16px; border-radius: 12px; background: #f1f5f3; }
 .funnel span { display: block; color: #62706a; font-size: 12px; font-weight: 800; }
@@ -30,6 +33,13 @@
 .barItem b { font-size: 10px; }.barItem small { color: #62706a; font-size: 9px; }
 .downloads { display: flex; flex-wrap: wrap; gap: 10px; }
 .downloads span { padding: 10px 13px; border-radius: 999px; background: #f1f5f3; font-size: 12px; font-weight: 900; }
+.channelTableWrap { overflow-x: auto; }
+.channelTable { width: 100%; min-width: 670px; border-collapse: collapse; font-size: 11px; }
+.channelTable th, .channelTable td { padding: 11px 10px; border-bottom: 1px solid #d8dfdb; text-align: right; }
+.channelTable thead th { color: #62706a; font-size: 9px; font-weight: 900; }
+.channelTable th:first-child { text-align: left; }
+.channelTable tbody tr:last-child th, .channelTable tbody tr:last-child td { border-bottom: 0; }
+.channelEmpty { padding: 30px 15px; border: 1.5px dashed #aeb8b2; border-radius: 10px; color: #62706a; text-align: center; font-size: 11px; }
 .notice { padding: 18px; border: 2px solid #b44938; border-radius: 13px; background: #ffe2db; color: #8d3022; }
 .qnaSection { margin-top: 22px; padding: 22px; border: 2px solid #1f2925; border-radius: 17px; background: #fffdf8; }
 .qnaHeading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }

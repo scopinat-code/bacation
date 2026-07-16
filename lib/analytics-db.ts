@@ -29,6 +29,15 @@ export type AnalyticsSummary = {
   prints: number;
   completionRate: number;
   daily: { label: string; visitors: number; completions: number }[];
+  channels: {
+    channel: string;
+    visitors: number;
+    sessions: number;
+    starts: number;
+    completions: number;
+    exports: number;
+    completionRate: number;
+  }[];
 };
 
 function database() {
@@ -37,18 +46,60 @@ function database() {
   return neon(connectionString);
 }
 
+function isMissingChannelColumn(error: unknown) {
+  return typeof error === "object" && error !== null
+    && "code" in error && error.code === "42703";
+}
+
+async function ensureAnalyticsChannelSchema() {
+  const sql = database();
+  await sql`
+    ALTER TABLE analytics_events
+      ADD COLUMN IF NOT EXISTS channel varchar(64) NOT NULL DEFAULT 'unknown'
+  `;
+  await sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'analytics_events_channel_format'
+      ) THEN
+        ALTER TABLE analytics_events
+          ADD CONSTRAINT analytics_events_channel_format
+          CHECK (channel ~ '^[a-z0-9][a-z0-9_-]{0,63}$');
+      END IF;
+    EXCEPTION
+      WHEN duplicate_object THEN NULL;
+    END $$
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS analytics_events_channel_created_idx
+      ON analytics_events (channel, created_at DESC)
+  `;
+}
+
 export async function recordAnalyticsEvent(input: {
   eventName: AnalyticsEventName;
   visitorId: string;
   sessionId: string;
   scope?: AnalyticsScope;
+  channel: string;
 }) {
   const sql = database();
-  await sql`
-    INSERT INTO analytics_events (event_name, visitor_id, session_id, scope)
-    VALUES (${input.eventName}, ${input.visitorId}, ${input.sessionId}, ${input.scope ?? null})
-    ON CONFLICT DO NOTHING
-  `;
+  const insert = () => sql`
+      INSERT INTO analytics_events (event_name, visitor_id, session_id, scope, channel)
+      VALUES (${input.eventName}, ${input.visitorId}, ${input.sessionId}, ${input.scope ?? null}, ${input.channel})
+      ON CONFLICT DO NOTHING
+    `;
+
+  try {
+    await insert();
+  } catch (error) {
+    if (!isMissingChannelColumn(error)) throw error;
+    await ensureAnalyticsChannelSchema();
+    await insert();
+  }
 }
 
 export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
@@ -105,6 +156,28 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
     ORDER BY days.day
   `;
 
+  const loadChannelRows = () => sql`
+      SELECT
+        channel,
+        COUNT(DISTINCT visitor_id) FILTER (WHERE event_name = 'page_view')::int AS visitors,
+        COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'page_view')::int AS sessions,
+        COUNT(DISTINCT visitor_id) FILTER (WHERE event_name = 'planner_started')::int AS starts,
+        COUNT(DISTINCT visitor_id) FILTER (WHERE event_name = 'schedule_completed')::int AS completions,
+        COUNT(*) FILTER (WHERE event_name IN ('png_download', 'pdf_download', 'pptx_download', 'print'))::int AS exports
+      FROM analytics_events
+      GROUP BY channel
+      ORDER BY visitors DESC, channel
+      LIMIT 50
+    `;
+  let channelRows;
+  try {
+    channelRows = await loadChannelRows();
+  } catch (error) {
+    if (!isMissingChannelColumn(error)) throw error;
+    await ensureAnalyticsChannelSchema();
+    channelRows = await loadChannelRows();
+  }
+
   const row = summaryRows[0] as AnalyticsSummaryRow | undefined;
   const number = (value: number | string | undefined) => Number(value ?? 0);
   const plannerStarted = number(row?.planner_started);
@@ -128,5 +201,18 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
       visitors: number(item.visitors as number | string),
       completions: number(item.completions as number | string),
     })),
+    channels: channelRows.map((item) => {
+      const starts = number(item.starts as number | string);
+      const completions = number(item.completions as number | string);
+      return {
+        channel: String(item.channel),
+        visitors: number(item.visitors as number | string),
+        sessions: number(item.sessions as number | string),
+        starts,
+        completions,
+        exports: number(item.exports as number | string),
+        completionRate: starts ? Math.round((completions / starts) * 100) : 0,
+      };
+    }),
   };
 }
